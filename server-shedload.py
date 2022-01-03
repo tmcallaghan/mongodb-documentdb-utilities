@@ -12,7 +12,8 @@ if ".docdb." in dbHost:
     connectionString = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?ssl=false&retryWrites=false'
     print('connecting to DocumentDB at {}'.format(dbHost))
 else:
-    connectionString = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false'
+    #connectionString = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false'
+    connectionString = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost
     print('connecting to MongoDB at {}'.format(dbHost))
 
 
