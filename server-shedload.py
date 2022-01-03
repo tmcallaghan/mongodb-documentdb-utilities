@@ -53,7 +53,7 @@ def shedLoad(opKillDb,opKillMinSeconds):
 def main():
     opKillDb = sys.argv[1]
     opKillMinSeconds = int(sys.argv[2])
-    print("Killing ops for database {} for operations over {} second(s)".format(opKillDb,opKillMinSeconds))
+    print("Killing running ops for database {} for operations over {} second(s)".format(opKillDb,opKillMinSeconds))
     shedLoad(opKillDb,opKillMinSeconds)
 
 
