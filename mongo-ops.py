@@ -6,7 +6,7 @@ import time
 import os
 
 
-def reporter(appConfig):
+def mongoCollect(appConfig):
     startServerOpCounters = {}
     startServerMetricsDocument = {}
     startCollectionStats = {}
@@ -125,24 +125,121 @@ def printDiffs(diffType,dict1,dict2):
             print('  {} | {} | {}'.format(diffType,key,dict1[key]-dict2[key]))
     
 
+def mongoEvaluate(appConfig):
+    with open(appConfig['file1'], 'r') as fp:
+        dict1 = json.load(fp)
+    dict1Start = dict1['start']
+
+    f1UptimeSeconds = dict1Start['uptime']
+    f1UptimeMinutes = f1UptimeSeconds / 60
+    f1UptimeHours = f1UptimeSeconds / 3600
+
+    if False:
+        # show metrics based merely on file1 uptime and metrics
+        print('Calculating metrics from start file and uptime of {} hour(s)'.format(f1UptimeHours))
+        print('')
+        printEvalHeader('sec')
+        printEval('opCounters','',f1UptimeHours,dict1Start['opcounters']['query'],dict1Start['opcounters']['insert'],dict1Start['opcounters']['update'],dict1Start['opcounters']['delete'])
+        printEval('docCounters','',f1UptimeHours,0,dict1Start['docmetrics']['inserted'],dict1Start['docmetrics']['updated'],dict1Start['docmetrics']['deleted'])
+        
+        for thisDb in dict1Start['collstats']:
+            for thisColl in dict1Start['collstats'][thisDb]:
+                thisCollDict = dict1Start['collstats'][thisDb][thisColl]
+                printEval(thisDb,thisColl,f1UptimeSeconds,thisCollDict['search calls'],thisCollDict['insert calls'],thisCollDict['update calls'],thisCollDict['remove calls'])
+
+    if appConfig['numFiles'] == 2:
+        with open(appConfig['file2'], 'r') as fp:
+            dict2 = json.load(fp)
+        dict2Start = dict2['start']
+
+        f2UptimeSeconds = dict2Start['uptime'] - f1UptimeSeconds
+        f2UptimeMinutes = f2UptimeSeconds / 60
+        f2UptimeHours = f2UptimeSeconds / 3600
+        
+        print('')
+        print('Calculating metrics from start and end files - duration of {} second(s).'.format(f2UptimeSeconds))
+        print('')
+        printEvalHeader('sec')
+        printEval('opCounters','',f1UptimeHours,dict2Start['opcounters']['query'] - dict1Start['opcounters']['query'],
+                                                dict2Start['opcounters']['insert'] - dict1Start['opcounters']['insert'],
+                                                dict2Start['opcounters']['update'] - dict1Start['opcounters']['update'],
+                                                dict2Start['opcounters']['delete'] - dict1Start['opcounters']['delete'])
+        printEval('docCounters','',f1UptimeHours,0,dict2Start['docmetrics']['inserted'] - dict1Start['docmetrics']['inserted'],
+                                                   dict2Start['docmetrics']['updated'] - dict1Start['docmetrics']['updated'],
+                                                   dict2Start['docmetrics']['deleted'] - dict1Start['docmetrics']['deleted'])
+        
+        for thisDb in dict2Start['collstats']:
+            for thisColl in dict2Start['collstats'][thisDb]:
+                endCollDict = dict2Start['collstats'][thisDb][thisColl]
+                if (thisDb not in dict1Start['collstats']) or (thisColl not in dict1Start['collstats'][thisDb]):
+                    startCollDict = {'search calls':0,'insert calls':0,'update calls':0,'remove calls':0}
+                else:
+                    startCollDict = dict1Start['collstats'][thisDb][thisColl]
+                printEval(thisDb,thisColl,f2UptimeSeconds,endCollDict['search calls'] - startCollDict['search calls'],
+                                                        endCollDict['insert calls'] - startCollDict['insert calls'],
+                                                        endCollDict['update calls'] - startCollDict['update calls'],
+                                                        endCollDict['remove calls'] - startCollDict['remove calls'])
+        
+
+def printEvalHeader(unitOfMeasure):
+    print('{:<40s} | {:<40s} | {:>12s} | {:>12s} | {:>12s} | {:>12s}'.format('Database','Collection','Query/'+unitOfMeasure,'Insert/'+unitOfMeasure,'Update/'+unitOfMeasure,'Delete/'+unitOfMeasure))
+    print('----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------')
+
+
+def printEval(thisLabel1,thisLabel2,thisTime,thisQuery,thisInsert,thisUpdate,thisDelete):
+    myQps = max(thisQuery / thisTime,0)
+    myIps = max(thisInsert / thisTime,0)
+    myUps = max(thisUpdate / thisTime,0)
+    myDps = max(thisDelete / thisTime,0)
+    print('{:<40s} | {:<40s} | {:12,.0f} | {:12,.0f} | {:12,.0f} | {:12,.0f}'.format(thisLabel1,thisLabel2,myQps,myIps,myUps,myDps))
+
+
 def main():
-    if len(sys.argv) != 3:
+    badArguments = False
+    
+    if (len(sys.argv) == 1):
+        # no arguments passed
+        badArguments = True
+    elif (len(sys.argv) >= 2) and (sys.argv[1].lower() == 'collect'):
+        if (len(sys.argv) != 4):
+            badArguments = True
+    elif (len(sys.argv) >= 2) and (sys.argv[1].lower() == 'evaluate'):
+        if (len(sys.argv) not in [3,4]):
+            badArguments = True
+
+    if badArguments:
         print("")
-        print("usage: python3 mongo-ops.py <number-of-seconds-to-run-for> <nickname-for-server>")
+        print("usage: python3 mongo-ops.py collect <number-of-seconds-to-run-for> <nickname-for-server>")
+        print("          Collect operational data from running MongoDB server")
+        print("usage: python3 mongo-ops.py evaluate <file1> [<file2>]")
+        print("          Evaluate operational from one or two collected files")
         print("")
         
-    else:
+    elif (sys.argv[1].lower() == 'collect'):
         appConfig = {}
-        appConfig['numRunSeconds'] = int(sys.argv[1])
-        appConfig['serverAlias'] = sys.argv[2]
+        appConfig['numRunSeconds'] = int(sys.argv[2])
+        appConfig['serverAlias'] = sys.argv[3]
         appConfig['numSecondsFeedback'] = 60
         appConfig['dbHost'] = os.environ.get('DOCDB_HOST')
         appConfig['dbUsername'] = os.environ.get('DOCDB_USERNAME')
         appConfig['dbPassword'] = os.environ.get('DOCDB_PASSWORD')
         #appConfig['connectionString'] = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false'
         appConfig['connectionString'] = 'mongodb://'+appConfig['dbUsername']+':'+appConfig['dbPassword']+'@'+appConfig['dbHost']+'/?retryWrites=false'
+        mongoCollect(appConfig)
 
-        reporter(appConfig)
+    elif (sys.argv[1].lower() == 'evaluate'):
+        appConfig = {}
+        appConfig['file1'] = sys.argv[2]
+        appConfig['numFiles'] = 1
+        print('starting file = {}'.format(appConfig['file1']))
+        if (len(sys.argv) == 4):
+            appConfig['file2'] = sys.argv[3]
+            appConfig['numFiles'] = 2
+            print('ending file = {}'.format(appConfig['file2']))
+        print('')
+        mongoEvaluate(appConfig)
+        print('')
+        
 
 
 if __name__ == "__main__":
