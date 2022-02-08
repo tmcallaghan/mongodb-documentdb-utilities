@@ -189,7 +189,8 @@ def mongoEvaluate(appConfig):
                     startCollDict = dict1Start['collstats'][thisDb][thisColl]
                 printEval(thisDb,thisColl,f2UptimeSeconds,endCollDict['search calls'] - startCollDict['search calls'],
                                                           endCollDict['insert calls'] - startCollDict['insert calls'],
-                                                          endCollDict['update calls'] - startCollDict['update calls'],
+                                                          #endCollDict['update calls'] - startCollDict['update calls'],
+                                                          endCollDict.get('modify calls',0) - startCollDict.get('modify calls',0),
                                                           endCollDict['remove calls'] - startCollDict['remove calls'],
                                                           dbColumnWidth,collColumnWidth)
         
