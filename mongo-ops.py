@@ -155,18 +155,30 @@ def mongoEvaluate(appConfig):
         f2UptimeSeconds = dict2Start['uptime'] - f1UptimeSeconds
         f2UptimeMinutes = f2UptimeSeconds / 60
         f2UptimeHours = f2UptimeSeconds / 3600
+
+        # determine output column widths
+        dbColumnWidth = 12
+        collColumnWidth = 12
+        for thisDb in dict2Start['collstats']:
+            if len(thisDb) > dbColumnWidth:
+                dbColumnWidth = len(thisDb)
+            for thisColl in dict2Start['collstats'][thisDb]:
+                if len(thisColl) > collColumnWidth:
+                    collColumnWidth = len(thisColl)
         
         print('')
         print('Calculating metrics from start and end files - duration of {} second(s).'.format(f2UptimeSeconds))
         print('')
-        printEvalHeader('sec')
+        printEvalHeader('sec',dbColumnWidth,collColumnWidth)
         printEval('opCounters','',f1UptimeHours,dict2Start['opcounters']['query'] - dict1Start['opcounters']['query'],
                                                 dict2Start['opcounters']['insert'] - dict1Start['opcounters']['insert'],
                                                 dict2Start['opcounters']['update'] - dict1Start['opcounters']['update'],
-                                                dict2Start['opcounters']['delete'] - dict1Start['opcounters']['delete'])
+                                                dict2Start['opcounters']['delete'] - dict1Start['opcounters']['delete'],
+                                                dbColumnWidth,collColumnWidth)
         printEval('docCounters','',f1UptimeHours,0,dict2Start['docmetrics']['inserted'] - dict1Start['docmetrics']['inserted'],
                                                    dict2Start['docmetrics']['updated'] - dict1Start['docmetrics']['updated'],
-                                                   dict2Start['docmetrics']['deleted'] - dict1Start['docmetrics']['deleted'])
+                                                   dict2Start['docmetrics']['deleted'] - dict1Start['docmetrics']['deleted'],
+                                                   dbColumnWidth,collColumnWidth)
         
         for thisDb in dict2Start['collstats']:
             for thisColl in dict2Start['collstats'][thisDb]:
@@ -176,22 +188,23 @@ def mongoEvaluate(appConfig):
                 else:
                     startCollDict = dict1Start['collstats'][thisDb][thisColl]
                 printEval(thisDb,thisColl,f2UptimeSeconds,endCollDict['search calls'] - startCollDict['search calls'],
-                                                        endCollDict['insert calls'] - startCollDict['insert calls'],
-                                                        endCollDict['update calls'] - startCollDict['update calls'],
-                                                        endCollDict['remove calls'] - startCollDict['remove calls'])
+                                                          endCollDict['insert calls'] - startCollDict['insert calls'],
+                                                          endCollDict['update calls'] - startCollDict['update calls'],
+                                                          endCollDict['remove calls'] - startCollDict['remove calls'],
+                                                          dbColumnWidth,collColumnWidth)
         
 
-def printEvalHeader(unitOfMeasure):
-    print('{:<40s} | {:<40s} | {:>12s} | {:>12s} | {:>12s} | {:>12s}'.format('Database','Collection','Query/'+unitOfMeasure,'Insert/'+unitOfMeasure,'Update/'+unitOfMeasure,'Delete/'+unitOfMeasure))
+def printEvalHeader(unitOfMeasure,dbColumnWidth,collColumnWidth):
+    print('{:<{dbWidth}s} | {:<{collWidth}s} | {:>12s} | {:>12s} | {:>12s} | {:>12s}'.format('Database','Collection','Query/'+unitOfMeasure,'Insert/'+unitOfMeasure,'Update/'+unitOfMeasure,'Delete/'+unitOfMeasure,dbWidth=dbColumnWidth,collWidth=collColumnWidth))
     print('----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------')
 
 
-def printEval(thisLabel1,thisLabel2,thisTime,thisQuery,thisInsert,thisUpdate,thisDelete):
+def printEval(thisLabel1,thisLabel2,thisTime,thisQuery,thisInsert,thisUpdate,thisDelete,dbColumnWidth,collColumnWidth):
     myQps = max(thisQuery / thisTime,0)
     myIps = max(thisInsert / thisTime,0)
     myUps = max(thisUpdate / thisTime,0)
     myDps = max(thisDelete / thisTime,0)
-    print('{:<40s} | {:<40s} | {:12,.0f} | {:12,.0f} | {:12,.0f} | {:12,.0f}'.format(thisLabel1,thisLabel2,myQps,myIps,myUps,myDps))
+    print('{:<{dbWidth}s} | {:<{collWidth}s} | {:12,.0f} | {:12,.0f} | {:12,.0f} | {:12,.0f}'.format(thisLabel1,thisLabel2,myQps,myIps,myUps,myDps,dbWidth=dbColumnWidth,collWidth=collColumnWidth))
 
 
 def main():
