@@ -130,7 +130,17 @@ def checkIfRedundant(idxName,idxKeyAsString,indexList):
         if thisIdx["keyAsString"].startswith(idxKeyAsString):
             returnList.append(thisIdx["name"])
     return returnList
-            
+
+
+def checkReplicaSet(appConfig):
+    print('connecting to server')
+    client = pymongo.MongoClient(appConfig['connectionString'])
+
+    rsStatus = client.admin.command("replSetGetStatus")
+    print("  rs.status() = {}".format(rsStatus))
+
+    client.close()
+
 
 def main():
     # v0
@@ -140,6 +150,7 @@ def main():
     #    * find unused and redundant indexes
     
     # v1
+    #    report server uptime with suggestions
     #    add proper argument system
     #    allow override of minimum Python version
     #    clean up JSON - remove "start"
@@ -172,6 +183,8 @@ def main():
     appConfig['connectionString'] = sys.argv[1]
     appConfig['serverAlias'] = sys.argv[2]
     
+    #checkReplicaSet(appConfig)
+
     outfName = getData(appConfig)
     
     evalIndexes(outfName)
