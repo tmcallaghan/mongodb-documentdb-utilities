@@ -154,16 +154,21 @@ def main():
     #    add proper argument system
     #    allow override of minimum Python version
     #    clean up JSON - remove "start"
+    #    check for same index twice
     
     # v2
     #    multi-server (via command line arg)
     #    compare host in JSON, look for duplicates
+    #    unit testing
     
     # v3
     #    replicaSet discovery
     
     # v4
     #    sharding support?
+    
+    # v5
+    #    diff across multiple runs, find unused
     
     
     # check for minimum Python version
