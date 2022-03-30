@@ -69,7 +69,8 @@ def mongoCollect(appConfig):
         printDiffs('serverDocumentMetrics',currentServerMetricsDocument,lastServerMetricsDocument)
         for thisDb in currentCollectionStats:
             for thisColl in currentCollectionStats[thisDb]:
-                printDiffs("{}.{}".format(thisDb,thisColl),currentCollectionStats[thisDb][thisColl],lastCollectionStats[thisDb][thisColl])
+                if (thisDb in lastCollectionStats) and (thisColl in lastCollectionStats[thisDb]):
+                    printDiffs("{}.{}".format(thisDb,thisColl),currentCollectionStats[thisDb][thisColl],lastCollectionStats[thisDb][thisColl])
         
         lastServerOpCounters = currentServerOpCounters.copy()
         lastServerMetricsDocument = currentServerMetricsDocument.copy()
@@ -287,6 +288,18 @@ def main():
                         default='day',
                         help='Unit of measure for reporting [sec | min | hr | day]')
 
+    parser.add_argument('--collect-seconds',
+                        required=False,
+                        type=int,
+                        default=0,
+                        help='Number of seconds to collect metrics.')
+
+    parser.add_argument('--feedback-seconds',
+                        required=False,
+                        type=int,
+                        default=60,
+                        help='If collecting, number of seconds between reporting metric changes.')
+
     args = parser.parse_args()
     
     MIN_PYTHON = (3, 7)
@@ -329,8 +342,8 @@ def main():
     appConfig = {}
     appConfig['uri'] = args.uri
     appConfig['serverAlias'] = args.server_alias
-    appConfig['numRunSeconds'] = 0
-    appConfig['numSecondsFeedback'] = 0
+    appConfig['numRunSeconds'] = args.collect_seconds
+    appConfig['numSecondsFeedback'] = min(args.feedback_seconds,args.collect_seconds)
     appConfig['jsonIndent'] = args.json_indent
     appConfig['file1'] = args.file1
     appConfig['file2'] = args.file2
