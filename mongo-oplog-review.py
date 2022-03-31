@@ -1,15 +1,23 @@
-#from datetime import datetime, timedelta
-#from pathlib import Path
-import json
 import argparse
 import os
 import sys
 import time
 import pymongo
 from bson.timestamp import Timestamp
+from datetime import datetime, timedelta
+
+
+def printLog(thisMessage,thisFile):
+    print(thisMessage)
+    thisFile.write("{}\n".format(thisMessage))
+
 
 def parseOplog(appConfig):
-    print('connecting to MongoDB aliased as {}'.format(appConfig['serverAlias']))
+    logTimeStamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    logFileName = "{}-{}-mongo-oplog-review.log".format(appConfig['serverAlias'],logTimeStamp)
+    fp = open(logFileName, 'w')
+
+    printLog('connecting to MongoDB aliased as {}'.format(appConfig['serverAlias']),fp)
     client = pymongo.MongoClient(appConfig['uri'])
     oplog = client.local.oplog.rs
     
@@ -19,16 +27,16 @@ def parseOplog(appConfig):
         # start with first oplog entry
         first = oplog.find().sort('$natural', pymongo.ASCENDING).limit(1).next()
         startTs = first['ts']
-        #print(first)
+        #printLog(first,fp)
     else:
         # start at an arbitrary position
         startTs = Timestamp(1641240727, 5)
-        print('starting with an arbitrary timestamp is not yet supported.')
+        printLog('starting with an arbitrary timestamp is not yet supported.',fp)
         sys.exit(1)
         # start with right now
         #startTs = Timestamp(int(time.time()), 1)
 
-    print("starting with opLog timestamp = {}".format(startTs.as_datetime()))
+    printLog("starting with opLog timestamp = {}".format(startTs.as_datetime()),fp)
 
     numTotalOplogEntries = 0
     opDict = {}
@@ -54,7 +62,7 @@ def parseOplog(appConfig):
             cursor = oplog.find({'ts': {'$gte': startTs}},{'op':1,'ns':1,'ts':1},cursor_type=pymongo.CursorType.TAILABLE_AWAIT,oplog_replay=True,batch_size=appConfig['batchSize'])
         else:
             #cursor = oplog.find({'ts': {'$gte': startTs},'ns':sourceNs},cursor_type=pymongo.CursorType.TAILABLE_AWAIT,oplog_replay=True)
-            print('Namespace specific parsing is not yet supported.')
+            printLog('Namespace specific parsing is not yet supported.',fp)
             sys.exit(1)
             
         printedFirstTs = False
@@ -68,12 +76,12 @@ def parseOplog(appConfig):
                     lastFeedback = time.time()
                     elapsedSeconds = time.time() - startTime
                     if (elapsedSeconds != 0):
-                        print("  tot oplog entries read {:16,d} @ {:12,.0f} per second".format(numTotalOplogEntries,numTotalOplogEntries//elapsedSeconds))
+                        printLog("  tot oplog entries read {:16,d} @ {:12,.0f} per second".format(numTotalOplogEntries,numTotalOplogEntries//elapsedSeconds),fp)
                     else:
-                        print("  tot oplog entries read {:16,d} @ {:12,.0f} per second".format(0,0.0))
+                        printLog("  tot oplog entries read {:16,d} @ {:12,.0f} per second".format(0,0.0),fp)
 
                 #if (not printedFirstTs) and (doc['op'] in ['i','u','d']) and (doc['ns'] == sourceNs):
-                #    print("*** first timestamp = {}".format(doc['ts']))
+                #    printLog("*** first timestamp = {}".format(doc['ts']),fp)
                 #    printedFirstTs = True
 
                 if (doc['op'] == 'i'):
@@ -117,7 +125,7 @@ def parseOplog(appConfig):
                         opDict[thisOp] = {'ins':0,'upd':0,'del':0,'com':0,'nop':1}
                         
                 else:
-                    print(doc)
+                    printLog(doc,fp)
                     sys.exit(1)
                 
                 '''
@@ -152,14 +160,14 @@ def parseOplog(appConfig):
         if len(thisOpKey) > nsWidth:
             nsWidth = len(thisOpKey)
 
-    print("")
-    print("-----------------------------------------------------------------------------------------")
-    print("")
+    printLog("",fp)
+    printLog("-----------------------------------------------------------------------------------------",fp)
+    printLog("",fp)
    
-    print("opLog elapsed seconds = {}".format(oplogSeconds))
+    printLog("opLog elapsed seconds = {}".format(oplogSeconds),fp)
 
     # print collection ops, ips/ups/dps
-    print("{:<{dbWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s}".format('Namespace',
+    printLog("{:<{dbWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s} | {:<{intWidth}s} | {:<{floatWidth}s}".format('Namespace',
             'Tot Inserts','Per '+appConfig['unitOfMeasure'],
             'Tot Updates','Per '+appConfig['unitOfMeasure'],
             'Tot Deletes','Per '+appConfig['unitOfMeasure'],
@@ -168,10 +176,10 @@ def parseOplog(appConfig):
             dbWidth=nsWidth,
             intWidth=15,
             floatWidth=10
-            ))
+            ),fp)
             
     for thisOpKey in sorted(opDict.keys()):
-        print("{:<{dbWidth}s} | {:<{intWidth},d} | {:<{floatWidth},.0f} | {:<{intWidth},d} | {:<{floatWidth},.0f} | {:<{intWidth},d} | {:<{floatWidth},.0f} | {:<{intWidth},d} | {:<{floatWidth},.0f} | {:<{intWidth},d} | {:<{floatWidth},.0f}".format(thisOpKey,
+        printLog("{:<{dbWidth}s} | {:<{intWidth},d} | {:<{floatWidth},.0f} | {:<{intWidth},d} | {:<{floatWidth},.0f} | {:<{intWidth},d} | {:<{floatWidth},.0f} | {:<{intWidth},d} | {:<{floatWidth},.0f} | {:<{intWidth},d} | {:<{floatWidth},.0f}".format(thisOpKey,
             opDict[thisOpKey]['ins'],opDict[thisOpKey]['ins']//calcDivisor,
             opDict[thisOpKey]['upd'],opDict[thisOpKey]['upd']//calcDivisor,
             opDict[thisOpKey]['del'],opDict[thisOpKey]['del']//calcDivisor,
@@ -180,14 +188,12 @@ def parseOplog(appConfig):
             dbWidth=nsWidth,
             intWidth=15,
             floatWidth=10
-            ))
+            ),fp)
 
-    print("")
+    printLog("",fp)
             
     client.close()
-
-
-
+    fp.close()
 
 def main():
     # roadmap
@@ -232,8 +238,8 @@ def main():
     parser.add_argument('--batch-size',
                         required=False,
                         type=int,
-                        default=2000,
-                        help='Number of oplog entries to retrieve per batch [default 2000].')
+                        default=1000,
+                        help='Number of oplog entries to retrieve per batch [default 1000].')
 
     args = parser.parse_args()
     
