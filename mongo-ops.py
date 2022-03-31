@@ -125,7 +125,7 @@ def getCollectionStats(client):
                 returnDict[thisDb['name']][thisColl['name']]['ns'] = collStats['ns']
                 returnDict[thisDb['name']][thisColl['name']]['size'] = collStats['size']
                 returnDict[thisDb['name']][thisColl['name']]['count'] = collStats['count']
-                returnDict[thisDb['name']][thisColl['name']]['avgObjSize'] = collStats['avgObjSize']
+                #returnDict[thisDb['name']][thisColl['name']]['avgObjSize'] = collStats['avgObjSize']
                 returnDict[thisDb['name']][thisColl['name']]['storageSize'] = collStats['storageSize']
                 returnDict[thisDb['name']][thisColl['name']]['nindexes'] = collStats['nindexes']
                 returnDict[thisDb['name']][thisColl['name']]['totalIndexSize'] = collStats['totalIndexSize']
