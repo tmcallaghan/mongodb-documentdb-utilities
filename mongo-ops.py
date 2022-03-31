@@ -114,10 +114,22 @@ def getCollectionStats(client):
                 #print("  skipping view {}".format(thisColl['name']))
                 pass
             else:
-                collStats = client[thisDb['name']].command("collstats",thisColl['name'])['wiredTiger']['cursor']
+                collStats = client[thisDb['name']].command("collstats",thisColl['name']).copy()
                 if thisDb['name'] not in returnDict:
                     returnDict[thisDb['name']] = {}
-                returnDict[thisDb['name']][thisColl['name']] = collStats.copy()
+                    
+                #if thisColl['name'] not in thisDb['name']:
+                returnDict[thisDb['name']][thisColl['name']] = {}
+                returnDict[thisDb['name']][thisColl['name']]['wiredTiger'] = {}
+                returnDict[thisDb['name']][thisColl['name']]['wiredTiger']['cursor'] = collStats['wiredTiger']['cursor']
+                returnDict[thisDb['name']][thisColl['name']]['ns'] = collStats['ns']
+                returnDict[thisDb['name']][thisColl['name']]['size'] = collStats['size']
+                returnDict[thisDb['name']][thisColl['name']]['count'] = collStats['count']
+                returnDict[thisDb['name']][thisColl['name']]['avgObjSize'] = collStats['avgObjSize']
+                returnDict[thisDb['name']][thisColl['name']]['storageSize'] = collStats['storageSize']
+                returnDict[thisDb['name']][thisColl['name']]['nindexes'] = collStats['nindexes']
+                returnDict[thisDb['name']][thisColl['name']]['totalIndexSize'] = collStats['totalIndexSize']
+                returnDict[thisDb['name']][thisColl['name']]['indexSizes'] = collStats['indexSizes']
     
     return returnDict
     
@@ -138,6 +150,9 @@ def mongoEvaluate(appConfig):
     f1UptimeHours = f1UptimeSeconds / 3600
     f1UptimeDays = f1UptimeHours / 24
 
+    totalDict = {'qry':0,'ins':0,'upd':0,'del':0}
+    fakeDict = {'qry':0,'ins':0,'upd':0,'del':0}
+
     if False:
         # show metrics based merely on file1 uptime and metrics
         print('Calculating metrics from start file and uptime of {} {}(s)'.format(f1UptimeHours,appConfig['unitOfMeasure']))
@@ -153,13 +168,13 @@ def mongoEvaluate(appConfig):
             useTime = f1UptimeDays
         
         printEvalHeader(appConfig['unitOfMeasure'])
-        printEval('opCounters','',useTime,dict1Start['opcounters']['query'],dict1Start['opcounters']['insert'],dict1Start['opcounters']['update'],dict1Start['opcounters']['delete'])
-        printEval('docCounters','',useTime,0,dict1Start['docmetrics']['inserted'],dict1Start['docmetrics']['updated'],dict1Start['docmetrics']['deleted'])
+        printEval('opCounters','',useTime,dict1Start['opcounters']['query'],dict1Start['opcounters']['insert'],dict1Start['opcounters']['update'],dict1Start['opcounters']['delete'],appConfig,fakeDict)
+        printEval('docCounters','',useTime,0,dict1Start['docmetrics']['inserted'],dict1Start['docmetrics']['updated'],dict1Start['docmetrics']['deleted'],appConfig,fakeDict)
         
         for thisDb in dict1Start['collstats']:
             for thisColl in dict1Start['collstats'][thisDb]:
-                thisCollDict = dict1Start['collstats'][thisDb][thisColl]
-                printEval(thisDb,thisColl,f1UptimeSeconds,thisCollDict['search calls'],thisCollDict['insert calls'],thisCollDict['update calls'],thisCollDict['remove calls'])
+                thisCollDict = dict1Start['collstats'][thisDb][thisColl]['wiredTiger']['cursor']
+                printEval(thisDb,thisColl,f1UptimeSeconds,thisCollDict['search calls'],thisCollDict['insert calls'],thisCollDict['update calls'],thisCollDict['remove calls'],appConfig,totalDict)
 
     if appConfig['numFiles'] == 2:
         with open(appConfig['file2'], 'r') as fp:
@@ -198,33 +213,35 @@ def mongoEvaluate(appConfig):
                                           dict2Start['opcounters']['insert'] - dict1Start['opcounters']['insert'],
                                           dict2Start['opcounters']['update'] - dict1Start['opcounters']['update'],
                                           dict2Start['opcounters']['delete'] - dict1Start['opcounters']['delete'],
-                                          dbColumnWidth,collColumnWidth)
+                                          dbColumnWidth,collColumnWidth,appConfig,fakeDict)
         printEval('docCounters','',useTime,0,dict2Start['docmetrics']['inserted'] - dict1Start['docmetrics']['inserted'],
                                              dict2Start['docmetrics']['updated'] - dict1Start['docmetrics']['updated'],
                                              dict2Start['docmetrics']['deleted'] - dict1Start['docmetrics']['deleted'],
-                                             dbColumnWidth,collColumnWidth)
+                                             dbColumnWidth,collColumnWidth,appConfig,fakeDict)
         
         for thisDb in dict2Start['collstats']:
             for thisColl in dict2Start['collstats'][thisDb]:
-                endCollDict = dict2Start['collstats'][thisDb][thisColl]
+                endCollDict = dict2Start['collstats'][thisDb][thisColl]['wiredTiger']['cursor']
                 if (thisDb not in dict1Start['collstats']) or (thisColl not in dict1Start['collstats'][thisDb]):
                     startCollDict = {'search calls':0,'insert calls':0,'update calls':0,'remove calls':0}
                 else:
-                    startCollDict = dict1Start['collstats'][thisDb][thisColl]
+                    startCollDict = dict1Start['collstats'][thisDb][thisColl]['wiredTiger']['cursor']
                 printEval(thisDb,thisColl,useTime,endCollDict['search calls'] - startCollDict['search calls'],
                                                   endCollDict['insert calls'] - startCollDict['insert calls'],
                                                   #endCollDict['update calls'] - startCollDict['update calls'],
                                                   endCollDict.get('modify calls',0) - startCollDict.get('modify calls',0),
                                                   endCollDict['remove calls'] - startCollDict['remove calls'],
-                                                  dbColumnWidth,collColumnWidth)
+                                                  dbColumnWidth,collColumnWidth,appConfig,totalDict)
+                                                  
+        printTotals('','TOTALS',useTime,0,0,0,0,dbColumnWidth,collColumnWidth,appConfig,totalDict)
         
 
 def printEvalHeader(unitOfMeasure,dbColumnWidth,collColumnWidth):
-    print('{:<{dbWidth}s} | {:<{collWidth}s} | {:>12s} | {:>12s} | {:>12s} | {:>12s}'.format('Database','Collection','Query/'+unitOfMeasure,'Insert/'+unitOfMeasure,'Update/'+unitOfMeasure,'Delete/'+unitOfMeasure,dbWidth=dbColumnWidth,collWidth=collColumnWidth))
+    print('{:<{dbWidth}s} | {:<{collWidth}s} | {:>14s} | {:>14s} | {:>14s} | {:>14s}'.format('Database','Collection','Query/'+unitOfMeasure,'Insert/'+unitOfMeasure,'Update/'+unitOfMeasure,'Delete/'+unitOfMeasure,dbWidth=dbColumnWidth,collWidth=collColumnWidth))
     print('----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------')
 
 
-def printEval(thisLabel1,thisLabel2,thisTime,thisQuery,thisInsert,thisUpdate,thisDelete,dbColumnWidth,collColumnWidth):
+def printEval(thisLabel1,thisLabel2,thisTime,thisQuery,thisInsert,thisUpdate,thisDelete,dbColumnWidth,collColumnWidth,appConfig,thisTotDict):
     if (thisTime == 0):
         myQps = 0
         myIps = 0
@@ -235,8 +252,20 @@ def printEval(thisLabel1,thisLabel2,thisTime,thisQuery,thisInsert,thisUpdate,thi
         myIps = max(thisInsert / thisTime,0)
         myUps = max(thisUpdate / thisTime,0)
         myDps = max(thisDelete / thisTime,0)
-    #print('{:<{dbWidth}s} | {:<{collWidth}s} | {:12,.0f} | {:12,.0f} | {:12,.0f} | {:12,.0f}'.format(thisLabel1,thisLabel2,thisQuery,thisInsert,thisUpdate,thisDelete,dbWidth=dbColumnWidth,collWidth=collColumnWidth))
-    print('{:<{dbWidth}s} | {:<{collWidth}s} | {:12,.0f} | {:12,.0f} | {:12,.0f} | {:12,.0f}'.format(thisLabel1,thisLabel2,myQps,myIps,myUps,myDps,dbWidth=dbColumnWidth,collWidth=collColumnWidth))
+        
+    thisTotDict['qry'] += myQps
+    thisTotDict['ins'] += myIps
+    thisTotDict['upd'] += myUps
+    thisTotDict['del'] += myDps
+        
+    if (myQps < 0.5 and myIps < 0.5 and myUps < 0.5 and myDps < 0.5 and appConfig['hideZeroLines']):
+        pass
+    else:
+        print('{:<{dbWidth}s} | {:<{collWidth}s} | {:14,.0f} | {:14,.0f} | {:14,.0f} | {:14,.0f}'.format(thisLabel1,thisLabel2,myQps,myIps,myUps,myDps,dbWidth=dbColumnWidth,collWidth=collColumnWidth))
+
+
+def printTotals(thisLabel1,thisLabel2,thisTime,thisQuery,thisInsert,thisUpdate,thisDelete,dbColumnWidth,collColumnWidth,appConfig,thisTotDict):
+    print('{:<{dbWidth}s} | {:<{collWidth}s} | {:14,.0f} | {:14,.0f} | {:14,.0f} | {:14,.0f}'.format(thisLabel1,thisLabel2,thisTotDict['qry'],thisTotDict['ins'],thisTotDict['upd'],thisTotDict['del'],dbWidth=dbColumnWidth,collWidth=collColumnWidth))
 
 
 def main():
@@ -300,6 +329,11 @@ def main():
                         default=60,
                         help='If collecting, number of seconds between reporting metric changes.')
 
+    parser.add_argument('--hide-zero-lines',
+                        required=False,
+                        action='store_true',
+                        help='If comparing, hide lines with all 0 values.')
+
     args = parser.parse_args()
     
     MIN_PYTHON = (3, 7)
@@ -349,6 +383,7 @@ def main():
     appConfig['file2'] = args.file2
     appConfig['numFiles'] = 2
     appConfig['unitOfMeasure'] = args.unit_of_measure
+    appConfig['hideZeroLines'] = args.hide_zero_lines
     
     if args.collect:
         mongoCollect(appConfig)
