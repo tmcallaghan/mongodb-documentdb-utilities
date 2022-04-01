@@ -117,15 +117,14 @@ def getCollectionStats(client):
                 collStats = client[thisDb['name']].command("collstats",thisColl['name']).copy()
                 if thisDb['name'] not in returnDict:
                     returnDict[thisDb['name']] = {}
-                    
-                #if thisColl['name'] not in thisDb['name']:
+
                 returnDict[thisDb['name']][thisColl['name']] = {}
                 returnDict[thisDb['name']][thisColl['name']]['wiredTiger'] = {}
                 returnDict[thisDb['name']][thisColl['name']]['wiredTiger']['cursor'] = collStats['wiredTiger']['cursor']
                 returnDict[thisDb['name']][thisColl['name']]['ns'] = collStats['ns']
                 returnDict[thisDb['name']][thisColl['name']]['size'] = collStats['size']
                 returnDict[thisDb['name']][thisColl['name']]['count'] = collStats['count']
-                #returnDict[thisDb['name']][thisColl['name']]['avgObjSize'] = collStats['avgObjSize']
+                returnDict[thisDb['name']][thisColl['name']]['avgObjSize'] = collStats.get('avgObjSize',-1)
                 returnDict[thisDb['name']][thisColl['name']]['storageSize'] = collStats['storageSize']
                 returnDict[thisDb['name']][thisColl['name']]['nindexes'] = collStats['nindexes']
                 returnDict[thisDb['name']][thisColl['name']]['totalIndexSize'] = collStats['totalIndexSize']
