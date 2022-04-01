@@ -1,3 +1,4 @@
+import argparse
 from datetime import datetime, timedelta
 import sys
 import json
@@ -58,7 +59,10 @@ def getCollectionStats(client):
         for thisColl in collCursor:
             #print(thisColl)
             if thisColl['type'] == 'view':
-                #print("  skipping view {}".format(thisColl['name']))
+                # exclude views
+                pass
+            elif thisColl['name'] in ['system.profile']:
+                # exclude certain collections
                 pass
             else:
                 #collStats = client[thisDb['name']].command("collstats",thisColl['name'])['wiredTiger']['cursor']
@@ -148,13 +152,14 @@ def main():
     #    * add python 3.7 check
     #    * save full set of data collected to filesystem
     #    * find unused and redundant indexes
+    #    add proper argument system
     
     # v1
     #    report server uptime with suggestions
-    #    add proper argument system
     #    allow override of minimum Python version
     #    clean up JSON - remove "start"
     #    check for same index twice
+    #    ensure compatibility with MongoDB 3.2+
     
     # v2
     #    multi-server (via command line arg)
@@ -170,23 +175,33 @@ def main():
     # v5
     #    diff across multiple runs, find unused
     
+    parser = argparse.ArgumentParser(description='Check for redundant and unused indexes.')
+        
+    parser.add_argument('--skip-python-version-check',
+                        required=False,
+                        action='store_true',
+                        help='Permit execution on Python 3.6 and prior')
+    
+    parser.add_argument('--uri',
+                        required=True,
+                        type=str,
+                        help='MongoDB Connection URI')
+
+    parser.add_argument('--server-alias',
+                        required=True,
+                        type=str,
+                        help='Alias for server, used to name output file')
+
+    args = parser.parse_args()
     
     # check for minimum Python version
     MIN_PYTHON = (3, 7)
-    if (sys.version_info < MIN_PYTHON):
+    if (not args.skip_python_version_check) and (sys.version_info < MIN_PYTHON):
         sys.exit("\nPython %s.%s or later is required.\n" % MIN_PYTHON)
-        
-    if len(sys.argv) != 3:
-        print("")
-        print("usage: python3 index-review.py serverURI serverAlias")
-        print("          serverURI   = mongodb:// formatted connection URI")
-        print("          serverAlias = alias for given server, for file naming purposes")
-        print("")
-        sys.exit(1)
     
     appConfig = {}
-    appConfig['connectionString'] = sys.argv[1]
-    appConfig['serverAlias'] = sys.argv[2]
+    appConfig['connectionString'] = args.uri
+    appConfig['serverAlias'] = args.server_alias
     
     #checkReplicaSet(appConfig)
 
