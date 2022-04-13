@@ -7,18 +7,18 @@ from bson.timestamp import Timestamp
 import threading
 import multiprocessing as mp
 import hashlib
-
+import argparse
 
 
 def oplog_processor(threadnum, appConfig, perfQ):
     print('processing thread {:>3d} | started'.format(threadnum))
 
-    c = pymongo.MongoClient(appConfig["connectionString"])
+    c = pymongo.MongoClient(appConfig["sourceUri"])
     oplog = c.local.oplog.rs
 
-    destConnection = pymongo.MongoClient(appConfig["destConnectionString"])
-    destDatabase = destConnection[appConfig["destNs"].split('.',2)[0]]
-    destCollection = destDatabase[appConfig["destNs"].split('.',2)[1]]
+    destConnection = pymongo.MongoClient(appConfig["targetUri"])
+    destDatabase = destConnection[appConfig["targetNs"].split('.',2)[0]]
+    destCollection = destDatabase[appConfig["targetNs"].split('.',2)[1]]
 
     '''
     i  = insert
@@ -35,9 +35,11 @@ def oplog_processor(threadnum, appConfig, perfQ):
 
     allDone = False
     threadOplogEntries = 0
-    threadMaxOplogEntries = appConfig["maxOplogEntries"] // appConfig["numProcessingThreads"]
 
     bulkOpList = []
+    
+    # list with replace, not insert, in case document already exists (replaying old oplog)
+    bulkOpListReplace = []
     numCurrentBulkOps = 0
 
     #while not allDone:
@@ -48,6 +50,11 @@ def oplog_processor(threadnum, appConfig, perfQ):
         
     while cursor.alive and not allDone:
         for doc in cursor:
+            # check if time to exit
+            if ((time.time() - startTime) > appConfig['durationSeconds']) and (appConfig['durationSeconds'] != 0):
+                allDone = True
+                break
+        
             endTs = doc['ts']
             
             # NOTE: Python's non-deterministic hash() cannot be used as it is seeded at startup, since this code is multiprocessing we need all hash calls to be the same between processes
@@ -59,7 +66,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
                 threadOplogEntries += 1
             
                 if (not printedFirstTs) and (doc['op'] in ['i','u','d']) and (doc['ns'] == appConfig["sourceNs"]):
-                    print('processing thread {:>3d} | first timestamp = {}'.format(threadnum,doc['ts']))
+                    print('processing thread {:>3d} | first timestamp = {} aka {}'.format(threadnum,doc['ts'],doc['ts'].as_datetime()))
                     printedFirstTs = True
 
                 if (doc['op'] == 'i'):
@@ -67,6 +74,8 @@ def oplog_processor(threadnum, appConfig, perfQ):
                     if (doc['ns'] == appConfig["sourceNs"]):
                         myCollectionOps += 1
                         bulkOpList.append(pymongo.InsertOne(doc['o']))
+                        # if playing old oplog, might need to change inserts to be replaces
+                        bulkOpListReplace.append(pymongo.ReplaceOne({'_id':doc['o']['_id']},doc['o'],upsert=True))
                         numCurrentBulkOps += 1
                     else:
                         pass
@@ -75,7 +84,8 @@ def oplog_processor(threadnum, appConfig, perfQ):
                     # update
                     if (doc['ns'] == appConfig["sourceNs"]):
                         myCollectionOps += 1
-                        doc['o'].pop('$v')
+                        # field "$v" is not present in MongoDB 3.4
+                        doc['o'].pop('$v',None)
                         bulkOpList.append(pymongo.UpdateOne(doc['o2'],doc['o'],upsert=False))
                         numCurrentBulkOps += 1
                     else:
@@ -102,33 +112,51 @@ def oplog_processor(threadnum, appConfig, perfQ):
                     print(doc)
                     sys.exit(1)
                     
-                if ((numCurrentBulkOps >= appConfig["numBulkOperationsPerCall"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) < time.time())) and (numCurrentBulkOps > 0):
-                    result = destCollection.bulk_write(bulkOpList,ordered=True)
-                    perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps})
+                if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) < time.time())) and (numCurrentBulkOps > 0):
+                    if not appConfig['dryRun']:
+                        try:
+                            result = destCollection.bulk_write(bulkOpList,ordered=True)
+                        except:
+                            # replace inserts as replaces
+                            #print("{}".format(bulkOpList))
+                            result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
+                            #print("{}".format(result))
+                    perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
                     bulkOpList = []
+                    bulkOpListReplace = []
                     numCurrentBulkOps = 0
                     lastBatch = time.time()
                 
-                if (threadOplogEntries > threadMaxOplogEntries):
-                    allDone = True
-                    break
-                    
-            if ((numCurrentBulkOps >= appConfig["numBulkOperationsPerCall"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) < time.time())) and (numCurrentBulkOps > 0):
-                result = destCollection.bulk_write(bulkOpList,ordered=True)
-                perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps})
+            if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) < time.time())) and (numCurrentBulkOps > 0):
+                if not appConfig['dryRun']:
+                    try:
+                        result = destCollection.bulk_write(bulkOpList,ordered=True)
+                    except:
+                        # replace inserts as replaces
+                        result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
+                        #print("{}".format(result))
+                perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
                 bulkOpList = []
+                bulkOpListReplace = []
                 numCurrentBulkOps = 0
                 lastBatch = time.time()
         
     if (numCurrentBulkOps > 0):
-        result = destCollection.bulk_write(bulkOpList,ordered=True)
-        perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps})
+        if not appConfig['dryRun']:
+            try:
+                result = destCollection.bulk_write(bulkOpList,ordered=True)
+            except:
+                # replace inserts as replaces
+                result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
+                #print("{}".format(result))
+        perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
         bulkOpList = []
+        bulkOpListReplace = []
         numCurrentBulkOps = 0
             
     c.close()
     
-    perfQ.put({"name":"processCompleted","processNum":threadNum})
+    perfQ.put({"name":"processCompleted","processNum":threadnum})
     
 
 def reporter(appConfig, perfQ):
@@ -138,19 +166,28 @@ def reporter(appConfig, perfQ):
     lastTime = time.time()
     
     lastProcessedOplogEntries = 0
-    nextReportTime = startTime + appConfig["numSecondsFeedback"]
+    nextReportTime = startTime + appConfig["feedbackSeconds"]
     
     numWorkersCompleted = 0
     numProcessedOplogEntries = 0
     
+    oldestDt = datetime(2099,12,31,1,1,1)
+    newestDt = datetime(2000,1,1,1,1,1)
+    
     while (numWorkersCompleted < appConfig["numProcessingThreads"]):
-        time.sleep(appConfig["numSecondsFeedback"])
+        time.sleep(appConfig["feedbackSeconds"])
         nowTime = time.time()
         
         while not perfQ.empty():
             qMessage = perfQ.get_nowait()
             if qMessage['name'] == "batchCompleted":
                 numProcessedOplogEntries += qMessage['operations']
+                thisEndDt = qMessage['endts'].as_datetime().replace(tzinfo=None)
+                if (thisEndDt > newestDt):
+                    newestDt = thisEndDt
+                if (thisEndDt < oldestDt):
+                    oldestDt = thisEndDt
+                #print("received endTs = {}".format(thisEndTs.as_datetime()))
             elif qMessage['name'] == "processCompleted":
                 numWorkersCompleted += 1
 
@@ -167,52 +204,120 @@ def reporter(appConfig, perfQ):
         intervalElapsedSeconds = nowTime - lastTime
         intervalOpsPerSecond = (numProcessedOplogEntries - lastProcessedOplogEntries) / intervalElapsedSeconds
         
+        # how far behind current time
+        oldTdBehind = datetime.utcnow() - oldestDt.replace(tzinfo=None)
+        oldSecondsBehind = int(oldTdBehind.total_seconds())
+        newTdBehind = datetime.utcnow() - newestDt.replace(tzinfo=None)
+        newSecondsBehind = int(newTdBehind.total_seconds())
+        
         logTimeStamp = datetime.utcnow().isoformat()[:-3] + 'Z'
-        print("[{0}] elapsed {1} | total ops {2:12,.2f} | interval ops {3:12,.2f} | tot {4:16,d}".format(logTimeStamp,thisHMS,totalOpsPerSecond,intervalOpsPerSecond,numProcessedOplogEntries))
-        nextReportTime = nowTime + appConfig["numSecondsFeedback"]
+        print("[{0}] elapsed {1} | total o/s {2:12,.2f} | interval o/s {3:12,.2f} | tot {4:16,d} | oldest {5} | {6:12,d} secs | newest {7} | {8:12,d} secs".format(logTimeStamp,thisHMS,totalOpsPerSecond,intervalOpsPerSecond,numProcessedOplogEntries,oldestDt,oldSecondsBehind,newestDt,newSecondsBehind))
+        nextReportTime = nowTime + appConfig["feedbackSeconds"]
         
         lastTime = nowTime
         lastProcessedOplogEntries = numProcessedOplogEntries
 
 
 def main():
-    appConfig = {
-        # start from the beginning of the oplog rather than an aribtrary timestamp
-        "startFromOplogStart" : True,
-        # source and destination collections
-        "sourceNs" : 'cdctest7.coll',
-        "destNs" : 'cdctest7.coll',
-        # number of seconds between console performance output info
-        "numSecondsFeedback" : 2,
-        # stop code after processing specific number of oplog entries, each thread takes it's portion of these
-        "maxOplogEntries" : 2000000000,
-        # batch size for insert/update/delete, batches can be smaller if numSecondsBetweenBatches is exceeded
-        "numBulkOperationsPerCall" : 100,
-        # number of seconds between batches, in case less than the number of batch entries has beeen found
-        "maxSecondsBetweenBatches" : 5,
-        # number of thread to process oplog in parallel
-        "numProcessingThreads" : 8
-    }
+    parser = argparse.ArgumentParser(description='CDC replication tool.')
 
-    print("processing oplog across {0} threads".format(appConfig["numProcessingThreads"]))
+    parser.add_argument('--skip-python-version-check',
+                        required=False,
+                        action='store_true',
+                        help='Permit execution on Python 3.6 and prior')
+    
+    parser.add_argument('--source-uri',
+                        required=True,
+                        type=str,
+                        help='Source URI')
 
-    # source server setup
-    dbHost = os.environ.get('DOCDB_HOST')
-    dbUsername = os.environ.get('DOCDB_USERNAME')
-    dbPassword = os.environ.get('DOCDB_PASSWORD')
+    parser.add_argument('--target-uri',
+                        required=True,
+                        type=str,
+                        help='Target URI')
 
-    if ".docdb." in dbHost:
-        appConfig["connectionString"] = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&replicaSet=rs0&retryWrites=false'
-        print('connecting to DocumentDB at {}'.format(dbHost))
+    parser.add_argument('--source-namespace',
+                        required=True,
+                        type=str,
+                        help='Source Namespace as <database>.<collection>')
+                        
+    parser.add_argument('--target-namespace',
+                        required=False,
+                        type=str,
+                        help='Target Namespace as <database>.<collection>, defaults to --source-namespace')
+                        
+    parser.add_argument('--duration-seconds',
+                        required=False,
+                        type=int,
+                        default=0,
+                        help='Number of seconds to run before existing, 0 = run forever')
+
+    parser.add_argument('--feedback-seconds',
+                        required=False,
+                        type=int,
+                        default=60,
+                        help='Number of seconds between feedback output')
+
+    '''
+    parser.add_argument('--threads',
+                        required=False,
+                        type=int,
+                        default=1,
+                        help='Number of threads (parallel processing)')
+    '''
+
+    parser.add_argument('--max-seconds-between-batches',
+                        required=False,
+                        type=int,
+                        default=5,
+                        help='Maximum number of seconds to await full batch')
+
+    parser.add_argument('--max-operations-per-batch',
+                        required=False,
+                        type=int,
+                        default=100,
+                        help='Maximum number of operations to include in a single batch')
+                        
+    parser.add_argument('--dry-run',
+                        required=False,
+                        action='store_true',
+                        help='Read source changes only, do not apply to target')
+
+    parser.add_argument('--start-position',
+                        required=True,
+                        type=str,
+                        help='Starting position - 0 for all available changes, otherwise YYYY-MM-DD+HH:MM:SS in UTC')
+
+    args = parser.parse_args()
+    
+    MIN_PYTHON = (3, 7)
+    if (not args.skip_python_version_check) and (sys.version_info < MIN_PYTHON):
+        sys.exit("\nPython %s.%s or later is required.\n" % MIN_PYTHON)
+
+    appConfig = {}
+    appConfig['sourceUri'] = args.source_uri
+    appConfig['targetUri'] = args.target_uri
+    #appConfig['numProcessingThreads'] = args.threads
+    appConfig['numProcessingThreads'] = 2
+    appConfig['maxSecondsBetweenBatches'] = args.max_seconds_between_batches
+    appConfig['maxOperationsPerBatch'] = args.max_operations_per_batch
+    appConfig['durationSeconds'] = args.duration_seconds
+    appConfig['feedbackSeconds'] = args.feedback_seconds
+    appConfig['dryRun'] = args.dry_run
+    appConfig['sourceNs'] = args.source_namespace
+    if not args.target_namespace:
+        appConfig['targetNs'] = args.source_namespace
     else:
-        appConfig["connectionString"] = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?replicaSet=rs0&retryWrites=false'
-        print('connecting to MongoDB at {}'.format(dbHost))
+        appConfig['targetNs'] = args.target_namespace
+    appConfig['startPosition'] = args.start_position
+    
+    print("processing oplog across {0} threads".format(appConfig['numProcessingThreads']))
 
-    c = pymongo.MongoClient(appConfig["connectionString"])
+    c = pymongo.MongoClient(appConfig["sourceUri"])
     oplog = c.local.oplog.rs
     appConfig["startTs"] = Timestamp(0, 1)
 
-    if appConfig["startFromOplogStart"]:
+    if appConfig["startPosition"] == "0":
         # start with first oplog entry
         first = oplog.find().sort('$natural', pymongo.ASCENDING).limit(1).next()
         appConfig["startTs"] = first['ts']
@@ -220,25 +325,13 @@ def main():
         # start at an arbitrary position
         #appConfig["startTs"] = Timestamp(1641240727, 5)
         # start with right now
-        appConfig["startTs"] = Timestamp(int(time.time()), 1)
+        #appConfig["startTs"] = Timestamp(int(time.time()), 1)
+        appConfig["startTs"] = Timestamp(datetime.fromisoformat(args.start_position), 1)
         
-    print("starting with timestamp = {}".format(appConfig["startTs"]))
+    print("starting with timestamp = {}".format(appConfig["startTs"].as_datetime()))
 
     c.close()
     
-    # destination server setup
-    dbDestHost = os.environ.get('DEST_HOST')
-    dbDestUsername = os.environ.get('DEST_USERNAME')
-    dbDestPassword = os.environ.get('DEST_PASSWORD')
-
-    if ".docdb." in dbDestHost:
-        #connectionString = 'mongodb://'+dbDestUsername+':'+dbDestPassword+'@'+dbDestHost+'/?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&replicaSet=rs0&retryWrites=false'
-        appConfig["destConnectionString"] = 'mongodb://'+dbDestUsername+':'+dbDestPassword+'@'+dbDestHost+'/?ssl=false&replicaSet=rs0&retryWrites=false'
-        print('connecting to Destination DocumentDB at {}'.format(dbDestHost))
-    else:
-        appConfig["destConnectionString"] = 'mongodb://'+dbDestUsername+':'+dbDestPassword+'@'+dbDestHost+'/?replicaSet=rs0&retryWrites=false'
-        print('connecting to Destination MongoDB at {}'.format(dbDestHost))
-
     mp.set_start_method('spawn')
     q = mp.Queue()
 
