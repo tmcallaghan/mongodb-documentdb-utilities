@@ -298,7 +298,7 @@ def main():
     appConfig['sourceUri'] = args.source_uri
     appConfig['targetUri'] = args.target_uri
     #appConfig['numProcessingThreads'] = args.threads
-    appConfig['numProcessingThreads'] = 2
+    appConfig['numProcessingThreads'] = 1
     appConfig['maxSecondsBetweenBatches'] = args.max_seconds_between_batches
     appConfig['maxOperationsPerBatch'] = args.max_operations_per_batch
     appConfig['durationSeconds'] = args.duration_seconds
