@@ -41,6 +41,8 @@ def oplog_processor(threadnum, appConfig, perfQ):
     # list with replace, not insert, in case document already exists (replaying old oplog)
     bulkOpListReplace = []
     numCurrentBulkOps = 0
+    
+    numTotalBatches = 0
 
     #while not allDone:
     cursor = oplog.find({'ts': {'$gte': appConfig["startTs"]},'ns':appConfig["sourceNs"]},cursor_type=pymongo.CursorType.TAILABLE_AWAIT,oplog_replay=True)
@@ -112,7 +114,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
                     print(doc)
                     sys.exit(1)
                     
-                if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) < time.time())) and (numCurrentBulkOps > 0):
+                if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) >= time.time())) and (numCurrentBulkOps > 0):
                     if not appConfig['dryRun']:
                         try:
                             result = destCollection.bulk_write(bulkOpList,ordered=True)
@@ -125,9 +127,10 @@ def oplog_processor(threadnum, appConfig, perfQ):
                     bulkOpList = []
                     bulkOpListReplace = []
                     numCurrentBulkOps = 0
+                    numTotalBatches += 1
                     lastBatch = time.time()
                 
-            if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) < time.time())) and (numCurrentBulkOps > 0):
+            if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) >= time.time())) and (numCurrentBulkOps > 0):
                 if not appConfig['dryRun']:
                     try:
                         result = destCollection.bulk_write(bulkOpList,ordered=True)
@@ -139,6 +142,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
                 bulkOpList = []
                 bulkOpListReplace = []
                 numCurrentBulkOps = 0
+                numTotalBatches += 1
                 lastBatch = time.time()
         
     if (numCurrentBulkOps > 0):
@@ -153,6 +157,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
         bulkOpList = []
         bulkOpListReplace = []
         numCurrentBulkOps = 0
+        numTotalBatches += 1
             
     c.close()
     
@@ -258,13 +263,11 @@ def main():
                         default=60,
                         help='Number of seconds between feedback output')
 
-    '''
     parser.add_argument('--threads',
                         required=False,
                         type=int,
                         default=1,
                         help='Number of threads (parallel processing)')
-    '''
 
     parser.add_argument('--max-seconds-between-batches',
                         required=False,
@@ -297,8 +300,7 @@ def main():
     appConfig = {}
     appConfig['sourceUri'] = args.source_uri
     appConfig['targetUri'] = args.target_uri
-    #appConfig['numProcessingThreads'] = args.threads
-    appConfig['numProcessingThreads'] = 1
+    appConfig['numProcessingThreads'] = args.threads
     appConfig['maxSecondsBetweenBatches'] = args.max_seconds_between_batches
     appConfig['maxOperationsPerBatch'] = args.max_operations_per_batch
     appConfig['durationSeconds'] = args.duration_seconds
