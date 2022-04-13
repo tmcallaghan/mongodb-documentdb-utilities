@@ -30,10 +30,10 @@ dbUsername = os.environ.get('DOCDB_USERNAME')
 dbPassword = os.environ.get('DOCDB_PASSWORD')
 
 if ".docdb." in dbHost:
-    connectionString = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false'
+    connectionString = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&replicaSet=rs0&readPreference=primary&retryWrites=false'
     print('connecting to DocumentDB at {}'.format(dbHost))
 else:
-    connectionString = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false'
+    connectionString = 'mongodb://'+dbUsername+':'+dbPassword+'@'+dbHost+'/?replicaSet=rs0&readPreference=primary&retryWrites=false'
     print('connecting to MongoDB at {}'.format(dbHost))
 
 numTotalInserts = 0
@@ -46,7 +46,7 @@ numInsertThreads = 1
 #numExistingDocuments = 0
 pkHighWaterMark = 0
 
-databaseName = 'cdctest7'
+databaseName = 'cdctest'
 collectionName = 'coll'
 
 
@@ -155,8 +155,8 @@ def inserter(threadNum):
         
         thisOpPercent = random.randint(1,totalPercent)
         
-        if thisOpPercent <= percentInserts:
-            # insert
+        if (thisOpPercent <= percentInserts) or (thisOps < 100):
+            # insert - first 100 operations MUST be inserts
             
             pkHighWaterMark += 1
             thisChecksum = random.randint(1,checksumMax)
