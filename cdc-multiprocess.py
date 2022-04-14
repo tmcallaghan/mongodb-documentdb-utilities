@@ -10,8 +10,14 @@ import hashlib
 import argparse
 
 
+def logIt(threadnum, message):
+    logTimeStamp = datetime.utcnow().isoformat()[:-3] + 'Z'
+    print("[{}] thread {:>3d} | {}".format(logTimeStamp,threadnum,message))
+
+
 def oplog_processor(threadnum, appConfig, perfQ):
-    print('processing thread {:>3d} | started'.format(threadnum))
+    if appConfig['verboseLogging']:
+        logIt(threadnum,'thread started')
 
     c = pymongo.MongoClient(appConfig["sourceUri"])
     oplog = c.local.oplog.rs
@@ -43,93 +49,98 @@ def oplog_processor(threadnum, appConfig, perfQ):
     numCurrentBulkOps = 0
     
     numTotalBatches = 0
-
-    #while not allDone:
-    cursor = oplog.find({'ts': {'$gte': appConfig["startTs"]},'ns':appConfig["sourceNs"]},cursor_type=pymongo.CursorType.TAILABLE_AWAIT,oplog_replay=True)
         
     printedFirstTs = False
     myCollectionOps = 0
-        
-    while cursor.alive and not allDone:
-        for doc in cursor:
-            # check if time to exit
-            if ((time.time() - startTime) > appConfig['durationSeconds']) and (appConfig['durationSeconds'] != 0):
-                allDone = True
-                break
-        
-            endTs = doc['ts']
-            
-            # NOTE: Python's non-deterministic hash() cannot be used as it is seeded at startup, since this code is multiprocessing we need all hash calls to be the same between processes
-            #   hash(str(doc['o']['_id']))
-            if (((doc['op'] in ['i','d']) and (doc['ns'] == appConfig["sourceNs"]) and ((int(hashlib.sha512(str(doc['o']['_id']).encode('utf-8')).hexdigest(), 16) % appConfig["numProcessingThreads"]) == threadnum)) or
-                ((doc['op'] in ['u']) and (doc['ns'] == appConfig["sourceNs"]) and ((int(hashlib.sha512(str(doc['o2']['_id']).encode('utf-8')).hexdigest(), 16) % appConfig["numProcessingThreads"]) == threadnum))):
-                # this is for my thread
+    
+    # starting timestamp
+    endTs = appConfig["startTs"]
 
-                threadOplogEntries += 1
-            
-                if (not printedFirstTs) and (doc['op'] in ['i','u','d']) and (doc['ns'] == appConfig["sourceNs"]):
-                    print('processing thread {:>3d} | first timestamp = {} aka {}'.format(threadnum,doc['ts'],doc['ts'].as_datetime()))
-                    printedFirstTs = True
+    while not allDone:
+        if appConfig['verboseLogging']:
+            logIt(threadnum,"Creating oplog tailing cursor for timestamp {}".format(endTs.as_datetime()))
 
-                if (doc['op'] == 'i'):
-                    # insert
-                    if (doc['ns'] == appConfig["sourceNs"]):
-                        myCollectionOps += 1
-                        bulkOpList.append(pymongo.InsertOne(doc['o']))
-                        # if playing old oplog, might need to change inserts to be replaces
-                        bulkOpListReplace.append(pymongo.ReplaceOne({'_id':doc['o']['_id']},doc['o'],upsert=True))
-                        numCurrentBulkOps += 1
-                    else:
+        cursor = oplog.find({'ts': {'$gte': endTs},'ns':appConfig["sourceNs"]},cursor_type=pymongo.CursorType.TAILABLE_AWAIT,oplog_replay=True)
+
+        while cursor.alive and not allDone:
+            for doc in cursor:
+                # check if time to exit
+                if ((time.time() - startTime) > appConfig['durationSeconds']) and (appConfig['durationSeconds'] != 0):
+                    allDone = True
+                    break
+
+                endTs = doc['ts']
+
+                # NOTE: Python's non-deterministic hash() cannot be used as it is seeded at startup, since this code is multiprocessing we need all hash calls to be the same between processes
+                #   hash(str(doc['o']['_id']))
+                if (((doc['op'] in ['i','d']) and (doc['ns'] == appConfig["sourceNs"]) and ((int(hashlib.sha512(str(doc['o']['_id']).encode('utf-8')).hexdigest(), 16) % appConfig["numProcessingThreads"]) == threadnum)) or
+                    ((doc['op'] in ['u']) and (doc['ns'] == appConfig["sourceNs"]) and ((int(hashlib.sha512(str(doc['o2']['_id']).encode('utf-8')).hexdigest(), 16) % appConfig["numProcessingThreads"]) == threadnum))):
+                    # this is for my thread
+
+                    threadOplogEntries += 1
+
+                    if (not printedFirstTs) and (doc['op'] in ['i','u','d']) and (doc['ns'] == appConfig["sourceNs"]):
+                        if appConfig['verboseLogging']:
+                            logIt(threadnum,'first timestamp = {} aka {}'.format(doc['ts'],doc['ts'].as_datetime()))
+                        printedFirstTs = True
+
+                    if (doc['op'] == 'i'):
+                        # insert
+                        if (doc['ns'] == appConfig["sourceNs"]):
+                            myCollectionOps += 1
+                            bulkOpList.append(pymongo.InsertOne(doc['o']))
+                            # if playing old oplog, might need to change inserts to be replaces
+                            bulkOpListReplace.append(pymongo.ReplaceOne({'_id':doc['o']['_id']},doc['o'],upsert=True))
+                            numCurrentBulkOps += 1
+                        else:
+                            pass
+
+                    elif (doc['op'] == 'u'):
+                        # update
+                        if (doc['ns'] == appConfig["sourceNs"]):
+                            myCollectionOps += 1
+                            # field "$v" is not present in MongoDB 3.4
+                            doc['o'].pop('$v',None)
+                            bulkOpList.append(pymongo.UpdateOne(doc['o2'],doc['o'],upsert=False))
+                            numCurrentBulkOps += 1
+                        else:
+                            pass
+
+                    elif (doc['op'] == 'd'):
+                        # delete
+                        if (doc['ns'] == appConfig["sourceNs"]):
+                            myCollectionOps += 1
+                            bulkOpList.append(pymongo.DeleteOne(doc['o']))
+                            numCurrentBulkOps += 1
+                        else:
+                            pass
+
+                    elif (doc['op'] == 'c'):
+                        # command
                         pass
-                    
-                elif (doc['op'] == 'u'):
-                    # update
-                    if (doc['ns'] == appConfig["sourceNs"]):
-                        myCollectionOps += 1
-                        # field "$v" is not present in MongoDB 3.4
-                        doc['o'].pop('$v',None)
-                        bulkOpList.append(pymongo.UpdateOne(doc['o2'],doc['o'],upsert=False))
-                        numCurrentBulkOps += 1
-                    else:
+
+                    elif (doc['op'] == 'n'):
+                        # no-op
                         pass
-                        
-                elif (doc['op'] == 'd'):
-                    # delete
-                    if (doc['ns'] == appConfig["sourceNs"]):
-                        myCollectionOps += 1
-                        bulkOpList.append(pymongo.DeleteOne(doc['o']))
-                        numCurrentBulkOps += 1
+
                     else:
-                        pass
-                        
-                elif (doc['op'] == 'c'):
-                    # command
-                    pass
-                        
-                elif (doc['op'] == 'n'):
-                    # no-op
-                    pass
-                        
-                else:
-                    print(doc)
-                    sys.exit(1)
-                    
+                        print(doc)
+                        sys.exit(1)
+
                 if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) >= time.time())) and (numCurrentBulkOps > 0):
                     if not appConfig['dryRun']:
                         try:
                             result = destCollection.bulk_write(bulkOpList,ordered=True)
                         except:
                             # replace inserts as replaces
-                            #print("{}".format(bulkOpList))
                             result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
-                            #print("{}".format(result))
                     perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
                     bulkOpList = []
                     bulkOpListReplace = []
                     numCurrentBulkOps = 0
                     numTotalBatches += 1
                     lastBatch = time.time()
-                
+
             if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) >= time.time())) and (numCurrentBulkOps > 0):
                 if not appConfig['dryRun']:
                     try:
@@ -137,14 +148,16 @@ def oplog_processor(threadnum, appConfig, perfQ):
                     except:
                         # replace inserts as replaces
                         result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
-                        #print("{}".format(result))
                 perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
                 bulkOpList = []
                 bulkOpListReplace = []
                 numCurrentBulkOps = 0
                 numTotalBatches += 1
                 lastBatch = time.time()
-        
+
+            # nothing arrived in the oplog for 1 second, pause before trying again
+            time.sleep(1)
+
     if (numCurrentBulkOps > 0):
         if not appConfig['dryRun']:
             try:
@@ -152,20 +165,20 @@ def oplog_processor(threadnum, appConfig, perfQ):
             except:
                 # replace inserts as replaces
                 result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
-                #print("{}".format(result))
         perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
         bulkOpList = []
         bulkOpListReplace = []
         numCurrentBulkOps = 0
         numTotalBatches += 1
-            
+
     c.close()
-    
+
     perfQ.put({"name":"processCompleted","processNum":threadnum})
-    
+
 
 def reporter(appConfig, perfQ):
-    print('reporting thread | started')
+    if appConfig['verboseLogging']:
+        logIt(-1,'reporting thread started')
     
     startTime = time.time()
     lastTime = time.time()
@@ -291,8 +304,13 @@ def main():
                         type=str,
                         help='Starting position - 0 for all available changes, otherwise YYYY-MM-DD+HH:MM:SS in UTC')
 
+    parser.add_argument('--verbose',
+                        required=False,
+                        action='store_true',
+                        help='Enable verbose logging')
+
     args = parser.parse_args()
-    
+
     MIN_PYTHON = (3, 7)
     if (not args.skip_python_version_check) and (sys.version_info < MIN_PYTHON):
         sys.exit("\nPython %s.%s or later is required.\n" % MIN_PYTHON)
@@ -312,8 +330,9 @@ def main():
     else:
         appConfig['targetNs'] = args.target_namespace
     appConfig['startPosition'] = args.start_position
+    appConfig['verboseLogging'] = args.verbose
     
-    print("processing oplog across {0} threads".format(appConfig['numProcessingThreads']))
+    logIt(-1,"processing oplog using {0} threads".format(appConfig['numProcessingThreads']))
 
     c = pymongo.MongoClient(appConfig["sourceUri"])
     oplog = c.local.oplog.rs
@@ -330,7 +349,7 @@ def main():
         #appConfig["startTs"] = Timestamp(int(time.time()), 1)
         appConfig["startTs"] = Timestamp(datetime.fromisoformat(args.start_position), 1)
         
-    print("starting with timestamp = {}".format(appConfig["startTs"].as_datetime()))
+    logIt(-1,"starting with timestamp = {}".format(appConfig["startTs"].as_datetime()))
 
     c.close()
     
