@@ -52,7 +52,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
         
     printedFirstTs = False
     myCollectionOps = 0
-    
+
     # starting timestamp
     endTs = appConfig["startTs"]
 
@@ -89,7 +89,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
                         if (doc['ns'] == appConfig["sourceNs"]):
                             myCollectionOps += 1
                             bulkOpList.append(pymongo.InsertOne(doc['o']))
-                            # if playing old oplog, might need to change inserts to be replaces
+                            # if playing old oplog, need to change inserts to be replaces (the inserts will fail due to _id uniqueness)
                             bulkOpListReplace.append(pymongo.ReplaceOne({'_id':doc['o']['_id']},doc['o'],upsert=True))
                             numCurrentBulkOps += 1
                         else:
@@ -102,6 +102,8 @@ def oplog_processor(threadnum, appConfig, perfQ):
                             # field "$v" is not present in MongoDB 3.4
                             doc['o'].pop('$v',None)
                             bulkOpList.append(pymongo.UpdateOne(doc['o2'],doc['o'],upsert=False))
+                            # if playing old oplog, need to change inserts to be replaces (the inserts will fail due to _id uniqueness)
+                            bulkOpListReplace.append(pymongo.UpdateOne(doc['o2'],doc['o'],upsert=False))
                             numCurrentBulkOps += 1
                         else:
                             pass
@@ -111,6 +113,8 @@ def oplog_processor(threadnum, appConfig, perfQ):
                         if (doc['ns'] == appConfig["sourceNs"]):
                             myCollectionOps += 1
                             bulkOpList.append(pymongo.DeleteOne(doc['o']))
+                            # if playing old oplog, need to change inserts to be replaces (the inserts will fail due to _id uniqueness)
+                            bulkOpListReplace.append(pymongo.DeleteOne(doc['o']))
                             numCurrentBulkOps += 1
                         else:
                             pass
@@ -127,7 +131,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
                         print(doc)
                         sys.exit(1)
 
-                if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) >= time.time())) and (numCurrentBulkOps > 0):
+                if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or (time.time() >= (lastBatch + appConfig["maxSecondsBetweenBatches"]))) and (numCurrentBulkOps > 0):
                     if not appConfig['dryRun']:
                         try:
                             result = destCollection.bulk_write(bulkOpList,ordered=True)
@@ -141,7 +145,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
                     numTotalBatches += 1
                     lastBatch = time.time()
 
-            if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or ((lastBatch + appConfig["maxSecondsBetweenBatches"]) >= time.time())) and (numCurrentBulkOps > 0):
+            if ((numCurrentBulkOps >= appConfig["maxOperationsPerBatch"]) or (time.time() >= (lastBatch + appConfig["maxSecondsBetweenBatches"]))) and (numCurrentBulkOps > 0):
                 if not appConfig['dryRun']:
                     try:
                         result = destCollection.bulk_write(bulkOpList,ordered=True)
