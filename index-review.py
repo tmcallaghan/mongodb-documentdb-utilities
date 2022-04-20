@@ -152,7 +152,7 @@ def main():
     #    * add python 3.7 check
     #    * save full set of data collected to filesystem
     #    * find unused and redundant indexes
-    #    add proper argument system
+    #    * add proper argument system
     
     # v1
     #    report server uptime with suggestions
