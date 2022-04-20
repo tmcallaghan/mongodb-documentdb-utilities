@@ -63,6 +63,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
         cursor = oplog.find({'ts': {'$gte': endTs},'ns':appConfig["sourceNs"]},cursor_type=pymongo.CursorType.TAILABLE_AWAIT,oplog_replay=True)
 
         while cursor.alive and not allDone:
+            #logIt(threadnum,"here")
             for doc in cursor:
                 # check if time to exit
                 if ((time.time() - startTime) > appConfig['durationSeconds']) and (appConfig['durationSeconds'] != 0):
@@ -138,7 +139,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
                         except:
                             # replace inserts as replaces
                             result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
-                    perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
+                    perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs,"processNum":threadnum})
                     bulkOpList = []
                     bulkOpListReplace = []
                     numCurrentBulkOps = 0
@@ -152,7 +153,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
                     except:
                         # replace inserts as replaces
                         result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
-                perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
+                perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs,"processNum":threadnum})
                 bulkOpList = []
                 bulkOpListReplace = []
                 numCurrentBulkOps = 0
@@ -169,7 +170,7 @@ def oplog_processor(threadnum, appConfig, perfQ):
             except:
                 # replace inserts as replaces
                 result = destCollection.bulk_write(bulkOpListReplace,ordered=True)
-        perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs})
+        perfQ.put({"name":"batchCompleted","operations":numCurrentBulkOps,"endts":endTs,"processNum":threadnum})
         bulkOpList = []
         bulkOpListReplace = []
         numCurrentBulkOps = 0
@@ -193,8 +194,7 @@ def reporter(appConfig, perfQ):
     numWorkersCompleted = 0
     numProcessedOplogEntries = 0
     
-    oldestDt = datetime(2099,12,31,1,1,1)
-    newestDt = datetime(2000,1,1,1,1,1)
+    dtDict = {}
     
     while (numWorkersCompleted < appConfig["numProcessingThreads"]):
         time.sleep(appConfig["feedbackSeconds"])
@@ -205,10 +205,11 @@ def reporter(appConfig, perfQ):
             if qMessage['name'] == "batchCompleted":
                 numProcessedOplogEntries += qMessage['operations']
                 thisEndDt = qMessage['endts'].as_datetime().replace(tzinfo=None)
-                if (thisEndDt > newestDt):
-                    newestDt = thisEndDt
-                if (thisEndDt < oldestDt):
-                    oldestDt = thisEndDt
+                thisProcessNum = qMessage['processNum']
+                if (thisProcessNum in dtDict) and (thisEndDt > dtDict[thisProcessNum]):
+                    dtDict[thisProcessNum] = thisEndDt
+                else:
+                    dtDict[thisProcessNum] = thisEndDt
                 #print("received endTs = {}".format(thisEndTs.as_datetime()))
             elif qMessage['name'] == "processCompleted":
                 numWorkersCompleted += 1
@@ -227,13 +228,17 @@ def reporter(appConfig, perfQ):
         intervalOpsPerSecond = (numProcessedOplogEntries - lastProcessedOplogEntries) / intervalElapsedSeconds
         
         # how far behind current time
-        oldTdBehind = datetime.utcnow() - oldestDt.replace(tzinfo=None)
-        oldSecondsBehind = int(oldTdBehind.total_seconds())
-        newTdBehind = datetime.utcnow() - newestDt.replace(tzinfo=None)
-        newSecondsBehind = int(newTdBehind.total_seconds())
-        
+        dtUtcNow = datetime.utcnow()
+        totSecondsBehind = 0
+        numSecondsBehindEntries = 0
+        for thisDt in dtDict:
+            totSecondsBehind = (dtUtcNow - dtDict[thisDt].replace(tzinfo=None)).total_seconds()
+            numSecondsBehindEntries += 1
+
+        avgSecondsBehind = int(totSecondsBehind / max(numSecondsBehindEntries,1))
+
         logTimeStamp = datetime.utcnow().isoformat()[:-3] + 'Z'
-        print("[{0}] elapsed {1} | total o/s {2:12,.2f} | interval o/s {3:12,.2f} | tot {4:16,d} | oldest {5} | {6:12,d} secs | newest {7} | {8:12,d} secs".format(logTimeStamp,thisHMS,totalOpsPerSecond,intervalOpsPerSecond,numProcessedOplogEntries,oldestDt,oldSecondsBehind,newestDt,newSecondsBehind))
+        print("[{0}] elapsed {1} | total o/s {2:12,.2f} | interval o/s {3:12,.2f} | tot {4:16,d} | {5:12,d} secs behind".format(logTimeStamp,thisHMS,totalOpsPerSecond,intervalOpsPerSecond,numProcessedOplogEntries,avgSecondsBehind))
         nextReportTime = nowTime + appConfig["feedbackSeconds"]
         
         lastTime = nowTime
